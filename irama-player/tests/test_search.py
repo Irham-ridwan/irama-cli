@@ -201,6 +201,98 @@ class TestSearchRecords(unittest.TestCase):
         selected = select_album_from_search([alb])
         self.assertIsNone(selected)
 
+    @patch("irama.cli.select_album_from_search")
+    @patch("irama.cli.IramaClient.search_records")
+    @patch("irama.cli.IramaClient.fetch_album")
+    @patch("irama.cli.interactive_menu")
+    def test_search_flow_fetches_full_album_when_no_playable_tracks(
+        self, mock_menu, mock_fetch, mock_search, mock_select
+    ):
+        from irama.models import Album, Track
+        from irama.cli import main
+
+        shallow_album = Album(
+            id="455",
+            title="Suling Bambu",
+            artist="Orkes Teruna Ria",
+            year="1960",
+            label="Irama",
+            tracks=[
+                Track(index=1, track_number="A1", title="Track 1", artist="Artist", duration="02:42", audio_url=None),
+            ]
+        )
+        full_album = Album(
+            id="455",
+            title="Suling Bambu",
+            artist="Orkes Teruna Ria",
+            year="1960",
+            label="Irama",
+            tracks=[
+                Track(index=1, track_number="A1", title="Track 1", artist="Artist", duration="02:42", audio_url="https://s3.amazonaws.com/t1.mp3"),
+            ]
+        )
+        mock_search.return_value = [shallow_album]
+        mock_select.return_value = shallow_album
+        mock_fetch.return_value = full_album
+
+        main(["search", "sunda"])
+
+        mock_fetch.assert_called_once_with("455")
+        mock_menu.assert_called_once()
+        passed_album = mock_menu.call_args[0][0]
+        self.assertEqual(passed_album, full_album)
+        self.assertEqual(len(passed_album.playable_tracks), 1)
+
+    @patch("builtins.input", side_effect=["a", "q"])
+    @patch("builtins.print")
+    def test_interactive_menu_unplayable_all(self, mock_print, mock_input):
+        from irama.models import Album, Track
+        from irama.cli import interactive_menu
+
+        album = Album(
+            id="100",
+            title="Unplayable Album",
+            artist="Artist",
+            year="1950",
+            label="Label",
+            tracks=[
+                Track(index=1, track_number="A1", title="Trek 1", artist="Artist", duration="03:00", audio_url=None)
+            ]
+        )
+        player = MagicMock()
+        downloader = MagicMock()
+
+        interactive_menu(album, player, downloader)
+
+        player.play.assert_not_called()
+        printed_texts = " ".join(str(call[0][0]) for call in mock_print.call_args_list if call[0])
+        self.assertIn("Tidak ada trek yang dapat diputar", printed_texts)
+
+    @patch("builtins.input", side_effect=["1", "q"])
+    @patch("builtins.print")
+    def test_interactive_menu_unplayable_specific_track(self, mock_print, mock_input):
+        from irama.models import Album, Track
+        from irama.cli import interactive_menu
+
+        album = Album(
+            id="100",
+            title="Unplayable Album",
+            artist="Artist",
+            year="1950",
+            label="Label",
+            tracks=[
+                Track(index=1, track_number="A1", title="Trek 1", artist="Artist", duration="03:00", audio_url=None)
+            ]
+        )
+        player = MagicMock()
+        downloader = MagicMock()
+
+        interactive_menu(album, player, downloader)
+
+        player.play.assert_not_called()
+        printed_texts = " ".join(str(call[0][0]) for call in mock_print.call_args_list if call[0])
+        self.assertIn("tidak memiliki stream audio yang tersedia", printed_texts)
+
 
 if __name__ == "__main__":
     unittest.main()

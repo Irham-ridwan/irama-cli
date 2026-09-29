@@ -168,9 +168,15 @@ def interactive_menu(album: Album, player: MpvPlayer, downloader: YtDlpDownloade
             break
 
         if choice == "a":
+            if not album.playable_tracks:
+                print("\n[!] Tidak ada trek yang dapat diputar pada album ini.")
+                continue
             player.play(album.playable_tracks, album)
             break
         elif choice == "d":
+            if not album.playable_tracks:
+                print("\n[!] Tidak ada trek yang dapat diunduh pada album ini.")
+                continue
             downloader.download_album(album)
             break
         elif choice == "q":
@@ -180,6 +186,9 @@ def interactive_menu(album: Album, player: MpvPlayer, downloader: YtDlpDownloade
             idx = int(choice) - 1
             if 0 <= idx < len(album.tracks):
                 selected_track = album.tracks[idx]
+                if not selected_track.is_playable:
+                    print(f"\n[!] Trek '{selected_track.title}' tidak memiliki stream audio yang tersedia.")
+                    continue
                 player.play([selected_track], album)
             else:
                 print(f"[!] Invalid track index. Choose between 1 and {len(album.tracks)}.")
@@ -279,13 +288,16 @@ def main(argv: Optional[list] = None) -> None:
             return
 
         album = selected_album
-        # If tracks are not loaded in search results, fetch the complete album
-        if not album.tracks:
+        # Search results in Strapi only return shallow relations (file_track audio stream is omitted).
+        # We fetch the full album to populate playable audio stream URLs and cache the record.
+        if not album.playable_tracks:
             try:
-                with Spinner(f"[*] Mengambil detail trek untuk album '{album.title}' (ID: {album.id})..."):
-                    album = client.fetch_album(album.id)
+                with Spinner(f"[*] Mengambil detail trek dan audio stream untuk album '{album.title}' (ID: {album.id})..."):
+                    full_album = client.fetch_album(album.id)
+                    if full_album:
+                        album = full_album
             except Exception as e:
-                print(f"\n[!] Error: {e}", file=sys.stderr)
+                print(f"\n[!] Error saat mengambil detail album: {e}", file=sys.stderr)
                 sys.exit(1)
     else:
         # 2. Direct Album ID flow
@@ -304,17 +316,27 @@ def main(argv: Optional[list] = None) -> None:
 
     # Direct CLI actions
     if args.play_all:
+        if not album.playable_tracks:
+            print("[!] Tidak ada trek yang dapat diputar pada album ini.", file=sys.stderr)
+            sys.exit(1)
         player.play(album.playable_tracks, album)
         return
     elif args.track:
         idx = args.track - 1
         if 0 <= idx < len(album.tracks):
-            player.play([album.tracks[idx]], album)
+            selected_track = album.tracks[idx]
+            if not selected_track.is_playable:
+                print(f"[!] Trek '{selected_track.title}' tidak memiliki stream audio yang tersedia.", file=sys.stderr)
+                sys.exit(1)
+            player.play([selected_track], album)
         else:
             print(f"[!] Track number must be between 1 and {len(album.tracks)}.")
             sys.exit(1)
         return
     elif args.download_all:
+        if not album.playable_tracks:
+            print("[!] Tidak ada trek yang dapat diunduh pada album ini.", file=sys.stderr)
+            sys.exit(1)
         downloader.download_album(album)
         return
 
