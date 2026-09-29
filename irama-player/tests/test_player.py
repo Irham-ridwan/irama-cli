@@ -173,6 +173,37 @@ class TestMpvPlayer(unittest.TestCase):
         self.assertIn("Referer: https://www.iramanusantara.org/", header_arg)
         self.assertIn("User-Agent:", header_arg)
 
+    @patch("irama.player.safe_print")
+    @patch("irama.player.is_mpv_available", return_value=True)
+    @patch("subprocess.run")
+    def test_mpv_player_with_ao_argument(self, mock_subprocess, mock_mpv_avail, mock_print):
+        player = MpvPlayer(ipc_path="/custom/test-ipc.sock", ao="null")
+        track = Track(1, "01", "Lagu Test", "Artis", "03:00", "https://example.com/audio.mp3")
+        album = Album(id="123", title="Album Test", artist="Artis", year="1970", label="Label", tracks=[track])
+
+        player.play([track], album)
+
+        cmd = mock_subprocess.call_args[0][0]
+        self.assertIn("--ao=null", cmd)
+
+    @patch("builtins.print")
+    @patch("irama.player.safe_print")
+    @patch("irama.player.is_mpv_available", return_value=True)
+    @patch("subprocess.run")
+    def test_mpv_player_exit_code_2_displays_helpful_error(self, mock_subprocess, mock_mpv_avail, mock_sprint, mock_print):
+        import subprocess
+        mock_subprocess.side_effect = subprocess.CalledProcessError(2, ["mpv"])
+
+        player = MpvPlayer(ipc_path="/custom/test-ipc.sock")
+        track = Track(1, "01", "Lagu Test", "Artis", "03:00", "https://example.com/audio.mp3")
+        album = Album(id="123", title="Album Test", artist="Artis", year="1970", label="Label", tracks=[track])
+
+        player.play([track], album)
+
+        printed = " ".join(str(call[0][0]) for call in mock_print.call_args_list if call[0])
+        self.assertIn("Audio device error", printed)
+        self.assertIn("GitHub Codespaces", printed)
+
 
 if __name__ == "__main__":
     unittest.main()

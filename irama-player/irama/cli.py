@@ -21,6 +21,13 @@ from .client import IramaClient
 from .player import MpvPlayer
 from .downloader import YtDlpDownloader
 from .models import Album
+from .radio import (
+    tune_station,
+    select_radio_station,
+    render_radio_banner,
+    resolve_station,
+    RADIO_STATIONS,
+)
 
 
 def safe_print(text: str = "", **kwargs) -> None:
@@ -38,6 +45,15 @@ def safe_print(text: str = "", **kwargs) -> None:
             .replace("✗", "[x]")
             .replace("▶", ">")
             .replace("⏸", "||")
+            .replace("📻", "[RADIO]")
+            .replace("🎋", "[SUNDA]")
+            .replace("🎻", "[KERONCONG]")
+            .replace("🌴", "[MELAYU]")
+            .replace("🎸", "[POP]")
+            .replace("🎷", "[JAZZ]")
+            .replace("🎲", "[MIX]")
+            .replace("📡", "[FREQ]")
+            .replace("🎛️", "[CTRL]")
         )
         print(ascii_text, **kwargs)
 
@@ -204,6 +220,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("album_id", nargs="?", help="Release/Album ID (e.g. 7073)")
     parser.add_argument("--search", "-s", help="Search albums by title (e.g. 'koes plus')")
+    parser.add_argument("--radio", action="store_true", help="Launch Irama Nusantara Radio CLI mode")
+    parser.add_argument("--radio-station", help="Radio station key, preset, or custom query (e.g. 'sunda', 'keroncong', 'pop-rock')")
+    parser.add_argument("--random", action="store_true", help="Tune to Nusantara Mix / random station")
+    parser.add_argument("--limit-albums", type=int, default=6, help="Maximum number of albums to aggregate into radio stream (default: 6)")
+    parser.add_argument("--no-shuffle", action="store_true", help="Do not shuffle radio tracks (play in album sequence)")
     parser.add_argument("--cookie", help="Browser session cookie for Cloudflare / Auth bypass")
     parser.add_argument("--no-cache", action="store_true", help="Bypass and disable local SQLite caching")
     parser.add_argument("--refresh-cache", action="store_true", help="Force refresh cache from API")
@@ -211,12 +232,31 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--track", type=int, help="Track index (1..N) to stream immediately")
     parser.add_argument("--download-all", action="store_true", help="Download all tracks with yt-dlp")
     parser.add_argument("--output-dir", default="./downloads", help="Directory destination for downloaded audio")
+    parser.add_argument("--ao", help="MPV audio output driver (e.g. 'pulse', 'alsa', 'null' for headless/dummy testing)")
     return parser
 
 
 def parse_cli_args(argv: Optional[list] = None) -> argparse.Namespace:
     if argv is None:
         argv = sys.argv[1:]
+
+    # Handle 'radio [station]' subcommand syntax
+    if argv and argv[0] == "radio":
+        station_tokens = []
+        option_tokens = []
+        i = 1
+        while i < len(argv):
+            if argv[i].startswith("-"):
+                option_tokens.extend(argv[i:])
+                break
+            station_tokens.append(argv[i])
+            i += 1
+        station = " ".join(station_tokens).strip()
+        transformed = ["--radio"]
+        if station:
+            transformed.extend(["--radio-station", station])
+        transformed.extend(option_tokens)
+        return build_parser().parse_args(transformed)
 
     # Handle 'search <query>' subcommand syntax
     if argv and argv[0] == "search":
@@ -241,11 +281,15 @@ def main(argv: Optional[list] = None) -> None:
 
     search_query = args.search
     album_id = args.album_id
+    is_radio = args.radio or args.random
+    radio_station = args.radio_station
+    if args.random:
+        radio_station = "mix"
 
-    # If neither album_id nor search_query is supplied via CLI args, prompt interactively
-    if not album_id and not search_query:
+    # If neither album_id, search_query, nor radio is supplied via CLI args, prompt interactively
+    if not album_id and not search_query and not is_radio:
         try:
-            user_input = input("Enter Irama Nusantara Album ID or search query (e.g. 7073 or 'search koes plus'): ").strip()
+            user_input = input("Enter Album ID, search query, or 'radio' (e.g. 7073, 'search koes plus', 'radio'): ").strip()
         except (KeyboardInterrupt, EOFError):
             print("\nCancelled.")
             return
@@ -254,7 +298,12 @@ def main(argv: Optional[list] = None) -> None:
             print("[!] Input cannot be empty.")
             return
 
-        if user_input.lower().startswith("search "):
+        if user_input.lower() == "radio":
+            is_radio = True
+        elif user_input.lower().startswith("radio "):
+            is_radio = True
+            radio_station = user_input[6:].strip()
+        elif user_input.lower().startswith("search "):
             search_query = user_input[7:].strip()
         elif user_input.isdigit():
             album_id = user_input
@@ -266,8 +315,47 @@ def main(argv: Optional[list] = None) -> None:
         enable_cache=not args.no_cache,
         refresh_cache=args.refresh_cache,
     )
-    player = MpvPlayer()
+    player = MpvPlayer(ao=args.ao)
     downloader = YtDlpDownloader(download_dir=args.output_dir)
+
+    # 0. Radio flow
+    if is_radio:
+        if not radio_station:
+            selected = select_radio_station()
+            if not selected:
+                return
+            radio_station = selected
+
+        st_info = resolve_station(radio_station)
+        try:
+            with Spinner(f"[*] Menghubungkan ke pemancar {st_info.name}..."):
+                station_info, fetched_albums, radio_tracks = tune_station(
+                    client=client,
+                    station_key_or_query=radio_station,
+                    limit_albums=args.limit_albums,
+                    shuffle=not args.no_shuffle,
+                )
+        except Exception as e:
+            print(f"\n[!] Error saat menghubungkan radio: {e}", file=sys.stderr)
+            sys.exit(1)
+
+        if not radio_tracks:
+            print(f"[!] Tidak ada trek yang dapat disiarkan untuk stasiun '{radio_station}'.")
+            return
+
+        render_radio_banner(station_info, len(radio_tracks), fetched_albums)
+
+        radio_album = Album(
+            id="radio",
+            title=f"Radio - {station_info.name}",
+            artist="Berbagai Artis Nusantara",
+            year="Various",
+            label="Gelombang Irama Nusantara",
+            tracks=radio_tracks,
+        )
+
+        player.play(radio_tracks, radio_album)
+        return
 
     # 1. Search flow
     if search_query:

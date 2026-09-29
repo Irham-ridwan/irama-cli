@@ -243,10 +243,12 @@ class MpvPlayer:
         referer: str = WEB_REFERER,
         user_agent: str = DEFAULT_USER_AGENT,
         ipc_path: Optional[str] = None,
+        ao: Optional[str] = None,
     ):
         self.referer = referer
         self.user_agent = user_agent
         self.ipc_path = ipc_path
+        self.ao = ao
 
     def play(self, tracks: List[Track], album: Album) -> None:
         """Plays a single track or an entire album using mpv with IPC status monitoring."""
@@ -274,6 +276,8 @@ class MpvPlayer:
             "--no-video",
             "--really-quiet",
         ]
+        if self.ao:
+            cmd.append(f"--ao={self.ao}")
 
         temp_playlist = None
         initial_title = f"{playable[0].artist} - {playable[0].title}"
@@ -304,7 +308,21 @@ class MpvPlayer:
         except KeyboardInterrupt:
             print("\n[*] Playback stopped by user.")
         except subprocess.CalledProcessError as e:
-            print(f"[!] MPV process exited with error code {e.returncode}")
+            if e.returncode == 2:
+                print(
+                    "\n[!] MPV keluar dengan kode error 2 (Audio device error).\n"
+                    "    Penyebab: Lingkungan saat ini (seperti GitHub Codespaces / Docker / server headless)\n"
+                    "    tidak memiliki sound card atau perangkat audio fisik yang terpasang.\n"
+                    "    Solusi:\n"
+                    "    1. Putar lagu langsung di komputer/laptop lokal (Windows/macOS/Linux Desktop)\n"
+                    "       yang memiliki speaker.\n"
+                    "    2. Di Codespaces/cloud, pilih opsi [D] untuk mengunduh lagu via yt-dlp, lalu putar\n"
+                    "       file .mp3 langsung di audio player bawaan VS Code.\n"
+                    "    3. Untuk menguji streaming & progress bar di lingkungan headless tanpa sound card,\n"
+                    "       gunakan flag: --ao=null (contoh: irama-player 455 --play-all --ao=null)."
+                )
+            else:
+                print(f"[!] MPV process exited with error code {e.returncode}")
         finally:
             monitor.stop()
             cleanup_ipc(ipc_path)

@@ -47,6 +47,26 @@ irama-player 7073 --cookie "session=...; cf_clearance=..."
 irama-player 7073 --refresh-cache
 # Menonaktifkan penggunaan cache
 irama-player 7073 --no-cache
+
+# 8. Radio CLI (Gelombang Irama Nusantara) 📻
+# Buka menu pemancar radio interaktif untuk memilih stasiun
+irama-player radio
+
+# Langsung putar stasiun radio preset (Sunda, Keroncong, Melayu, Pop-Rock, Jazz, dll.)
+irama-player radio "sunda"
+irama-player radio "keroncong"
+irama-player radio "pop-rock"
+irama-player radio "jazz"
+
+# Putar siaran acak lintas genre & era (Nusantara Mix)
+irama-player radio --random
+
+# Putar siaran kustom berdasarkan kata kunci bebas apa saja
+irama-player radio "tarling cirebon"
+irama-player radio "bali"
+
+# Jalankan di GitHub Codespaces / container headless (tanpa sound card fisik)
+irama-player radio "sunda" --ao=null
 ```
 
 ## 🧪 Menjalankan Pengujian
