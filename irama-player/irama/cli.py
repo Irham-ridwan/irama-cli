@@ -6,10 +6,40 @@ import threading
 import argparse
 from typing import Optional, List
 
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+if hasattr(sys.stderr, "reconfigure"):
+    try:
+        sys.stderr.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+
 from .client import IramaClient
 from .player import MpvPlayer
 from .downloader import YtDlpDownloader
 from .models import Album
+
+
+def safe_print(text: str = "", **kwargs) -> None:
+    """Safely prints text with fallback for non-UTF8 terminals."""
+    try:
+        print(text, **kwargs)
+    except UnicodeEncodeError:
+        ascii_text = (
+            text.replace("🔍", "[SEARCH]")
+            .replace("💿", "[ALBUM]")
+            .replace("🎤", "[ARTIST]")
+            .replace("📅", "[YEAR]")
+            .replace("🆔", "[ID]")
+            .replace("✓", "[v]")
+            .replace("✗", "[x]")
+            .replace("▶", ">")
+            .replace("⏸", "||")
+        )
+        print(ascii_text, **kwargs)
 
 
 class Spinner:
@@ -69,37 +99,37 @@ class Spinner:
 
 def render_metadata_table(album: Album) -> None:
     """Pretty prints album and tracklist information."""
-    print("\n" + "=" * 76)
-    print(f"💿 ALBUM : {album.title}")
-    print(f"🎤 ARTIST: {album.artist}")
-    print(f"📅 YEAR  : {album.year} | LABEL: {album.label}")
-    print(f"🆔 ID    : {album.id}")
-    print("=" * 76)
-    print(f"{'No':<6} | {'Title':<40} | {'Duration':<8} | {'Stream Status'}")
-    print("-" * 76)
+    safe_print("\n" + "=" * 76)
+    safe_print(f"💿 ALBUM : {album.title}")
+    safe_print(f"🎤 ARTIST: {album.artist}")
+    safe_print(f"📅 YEAR  : {album.year} | LABEL: {album.label}")
+    safe_print(f"🆔 ID    : {album.id}")
+    safe_print("=" * 76)
+    safe_print(f"{'No':<6} | {'Title':<40} | {'Duration':<8} | {'Stream Status'}")
+    safe_print("-" * 76)
 
     for t in album.tracks:
         status = "✓ Ready" if t.is_playable else "✗ Unavailable"
         title_disp = (t.title[:37] + "...") if len(t.title) > 40 else t.title
-        print(f"{t.track_number:<6} | {title_disp:<40} | {t.duration:<8} | {status}")
+        safe_print(f"{t.track_number:<6} | {title_disp:<40} | {t.duration:<8} | {status}")
 
-    print("=" * 76)
+    safe_print("=" * 76)
 
 
 def render_search_results_table(albums: List[Album]) -> None:
     """Pretty prints search results in a numbered table."""
-    print("\n" + "=" * 76)
-    print(f"🔍 HASIL PENCARIAN ({len(albums)} album ditemukan)")
-    print("=" * 76)
-    print(f"{'No':<4} | {'ID':<6} | {'Judul Album':<32} | {'Artis':<18} | {'Tahun'}")
-    print("-" * 76)
+    safe_print("\n" + "=" * 76)
+    safe_print(f"🔍 HASIL PENCARIAN ({len(albums)} album ditemukan)")
+    safe_print("=" * 76)
+    safe_print(f"{'No':<4} | {'ID':<6} | {'Judul Album':<32} | {'Artis':<18} | {'Tahun'}")
+    safe_print("-" * 76)
 
     for idx, alb in enumerate(albums, start=1):
         title_disp = (alb.title[:29] + "...") if len(alb.title) > 32 else alb.title
         artist_disp = (alb.artist[:15] + "...") if len(alb.artist) > 18 else alb.artist
-        print(f"{idx:<4} | {alb.id:<6} | {title_disp:<32} | {artist_disp:<18} | {alb.year}")
+        safe_print(f"{idx:<4} | {alb.id:<6} | {title_disp:<32} | {artist_disp:<18} | {alb.year}")
 
-    print("=" * 76)
+    safe_print("=" * 76)
 
 
 def select_album_from_search(albums: List[Album]) -> Optional[Album]:

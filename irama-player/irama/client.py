@@ -56,8 +56,9 @@ class IramaClient:
                 return self._parse_album_json(cached_data, str_id)
 
         url = f"{API_BASE_URL}/{str_id}"
+        params = {"populate": "*"}
         try:
-            response = self.session.get(url, timeout=self.timeout)
+            response = self.session.get(url, params=params, timeout=self.timeout)
 
             # Detect Cloudflare Challenge / Turnstile Block
             if response.status_code in (403, 503):
@@ -94,39 +95,61 @@ class IramaClient:
             raise RuntimeError(f"API request failed: {e}")
 
     def search_records(self, query: str) -> List[Album]:
-        """Searches albums by title using Strapi query filter."""
+        """Searches albums with fallback across Strapi query parameters."""
         if not query or not query.strip():
             return []
 
         url = API_BASE_URL
-        params = {
-            "filters[title][$containsi]": query.strip(),
-            "populate": "*",
-        }
-        try:
-            response = self.session.get(url, params=params, timeout=self.timeout)
+        clean_q = query.strip()
+        # Strapi v4 in production uses _q for full-text search across titles & artists,
+        # or filters[record_title][$containsi]. Note that filters[title] causes a 500
+        # error in Strapi because the database column is named 'record_title'.
+        param_candidates = [
+            {"_q": clean_q, "populate": "*"},
+            {"filters[record_title][$containsi]": clean_q, "populate": "*"},
+            {"filters[title][$containsi]": clean_q, "populate": "*"},
+        ]
 
-            # Detect Cloudflare Challenge / Turnstile Block
-            if response.status_code in (403, 503):
-                server_hdr = response.headers.get("Server", "").lower()
-                if "cloudflare" in server_hdr or "challenge" in response.text.lower():
-                    raise PermissionError(
-                        "Cloudflare Challenge/WAF detected!\n"
-                        "Provide a valid browser session cookie with --cookie."
-                    )
-                response.raise_for_status()
+        last_error = None
+        for params in param_candidates:
+            try:
+                response = self.session.get(url, params=params, timeout=self.timeout)
 
-            response.raise_for_status()
-            raw_json = response.json()
-            return self._parse_search_records_json(raw_json)
+                # Detect Cloudflare Challenge / Turnstile Block
+                if response.status_code in (403, 503):
+                    server_hdr = response.headers.get("Server", "").lower()
+                    if "cloudflare" in server_hdr or "challenge" in response.text.lower():
+                        raise PermissionError(
+                            "Cloudflare Challenge/WAF detected!\n"
+                            "Provide a valid browser session cookie with --cookie."
+                        )
+                    # If 500 error, Strapi rejected this parameter candidate; try next candidate
+                    if response.status_code == 500:
+                        continue
+                    response.raise_for_status()
 
-        except requests.exceptions.Timeout:
-            raise TimeoutError(
-                f"Connection timed out after {self.timeout[1]}s. "
-                "Irama Nusantara server TTFB is very slow or overloaded."
-            )
-        except requests.exceptions.RequestException as e:
-            raise RuntimeError(f"API request failed: {e}")
+                if response.status_code == 200:
+                    raw_json = response.json()
+                    return self._parse_search_records_json(raw_json)
+                elif response.status_code == 500:
+                    continue
+                else:
+                    response.raise_for_status()
+
+            except requests.exceptions.Timeout:
+                raise TimeoutError(
+                    f"Connection timed out after {self.timeout[1]}s. "
+                    "Irama Nusantara server TTFB is very slow or overloaded."
+                )
+            except PermissionError:
+                raise
+            except requests.exceptions.RequestException as e:
+                last_error = e
+                continue
+
+        if last_error:
+            raise RuntimeError(f"API request failed: {last_error}")
+        return []
 
     @classmethod
     def _parse_search_records_json(cls, raw_json: Any) -> List[Album]:
@@ -170,26 +193,73 @@ class IramaClient:
             attrs = raw_json
             record_id = str(raw_json.get("id", fallback_id))
 
-        album_title = attrs.get("title") or attrs.get("album_title") or f"Record #{record_id}"
+        album_title = (
+            attrs.get("record_title")
+            or attrs.get("title")
+            or attrs.get("album_title")
+            or f"Record #{record_id}"
+        )
 
         # Resolve Artist
         artist_raw = attrs.get("artist") or attrs.get("artists")
-        artist_name = "Various Artists"
+        artist_names = []
         if isinstance(artist_raw, str):
-            artist_name = artist_raw
+            artist_names.append(artist_raw)
+        elif isinstance(artist_raw, list):
+            for a in artist_raw:
+                if isinstance(a, dict):
+                    name = a.get("name_variation") or a.get("name") or a.get("artist_name")
+                    if name:
+                        artist_names.append(name)
+                elif isinstance(a, str):
+                    artist_names.append(a)
         elif isinstance(artist_raw, dict):
             artist_data = artist_raw.get("data")
             if isinstance(artist_data, dict):
-                artist_name = artist_data.get("attributes", {}).get("name", "Unknown Artist")
+                attrs_art = artist_data.get("attributes", {})
+                name = attrs_art.get("name") or attrs_art.get("artist_name") or attrs_art.get("name_variation")
+                if name:
+                    artist_names.append(name)
             else:
-                artist_name = artist_raw.get("name", "Unknown Artist")
-        elif isinstance(artist_raw, list) and artist_raw:
-            artist_name = ", ".join([a.get("name", "") if isinstance(a, dict) else str(a) for a in artist_raw])
+                name = artist_raw.get("name") or artist_raw.get("artist_name")
+                if name:
+                    artist_names.append(name)
 
-        release_year = str(attrs.get("release_year") or attrs.get("year") or "N/A")
-        label = attrs.get("label") or "N/A"
-        if isinstance(label, dict):
-            label = label.get("name") or label.get("attributes", {}).get("name", "N/A")
+        # Fallback to credits if artist is not populated
+        if not artist_names and "credits" in attrs and isinstance(attrs["credits"], list):
+            for c in attrs["credits"]:
+                if isinstance(c, dict) and c.get("artist_name"):
+                    artist_names.append(c["artist_name"])
+                    break
+
+        artist_name = ", ".join(artist_names) if artist_names else "Various Artists"
+
+        # Resolve Release Year
+        release_year = str(
+            attrs.get("tahun")
+            or attrs.get("released")
+            or attrs.get("release_year")
+            or attrs.get("year")
+            or "N/A"
+        )
+
+        # Resolve Label
+        label_raw = attrs.get("labels") or attrs.get("label") or "N/A"
+        label = "N/A"
+        if isinstance(label_raw, str):
+            label = label_raw
+        elif isinstance(label_raw, dict):
+            if "data" in label_raw and isinstance(label_raw["data"], list) and label_raw["data"]:
+                first_label = label_raw["data"][0]
+                label_attrs = first_label.get("attributes", first_label) if isinstance(first_label, dict) else {}
+                label = label_attrs.get("label_name") or label_attrs.get("name") or "N/A"
+            else:
+                label = (
+                    label_raw.get("label_name")
+                    or label_raw.get("name")
+                    or label_raw.get("attributes", {}).get("name")
+                    or "N/A"
+                )
 
         # Parse Tracklist
         raw_tracks = attrs.get("tracklists") or attrs.get("tracks") or []
@@ -206,6 +276,11 @@ class IramaClient:
                 or t.get("url")
             )
 
+            if not audio_url and "file_track" in t and isinstance(t["file_track"], dict):
+                file_data = t["file_track"].get("data")
+                if isinstance(file_data, dict):
+                    audio_url = file_data.get("attributes", {}).get("url")
+
             if not audio_url and "media" in t and isinstance(t["media"], dict):
                 audio_url = t["media"].get("url")
             if not audio_url and "audio" in t and isinstance(t["audio"], dict):
@@ -219,10 +294,17 @@ class IramaClient:
                 audio_url = f"https://core.iramanusantara.org{audio_url}"
 
             title = t.get("title") or t.get("name") or t.get("track_title") or f"Track {idx}"
-            raw_track_no = t.get("track_number") or t.get("track_no") or idx
+            raw_track_no = t.get("pos") or t.get("track_number") or t.get("track_no") or idx
             track_num = format_track_number(raw_track_no, fallback_index=idx)
             track_artist = t.get("artist") or artist_name
-            duration = str(t.get("duration") or t.get("length") or "N/A")
+
+            dur_raw = t.get("duration") or t.get("length")
+            if isinstance(dur_raw, (int, float)):
+                m = int(dur_raw) // 60
+                s = int(dur_raw) % 60
+                duration = f"{m:02d}:{s:02d}"
+            else:
+                duration = str(dur_raw or "N/A")
 
             tracks.append(Track(
                 index=idx,

@@ -94,7 +94,7 @@ class TestSearchRecords(unittest.TestCase):
         self.assertEqual(call_args[0], API_BASE_URL)
         self.assertEqual(
             call_kwargs["params"],
-            {"filters[title][$containsi]": "malam", "populate": "*"}
+            {"_q": "malam", "populate": "*"}
         )
         self.assertEqual(self.client.session.headers["Referer"], WEB_REFERER)
         self.assertEqual(self.client.session.headers["User-Agent"], DEFAULT_USER_AGENT)
