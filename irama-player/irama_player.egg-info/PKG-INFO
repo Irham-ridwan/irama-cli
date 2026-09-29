@@ -1,0 +1,11 @@
+Metadata-Version: 2.4
+Name: irama-player
+Version: 0.1.0
+Summary: Irama Nusantara Album Streamer and Downloader CLI
+Author: Gemini Software Engineer
+Requires-Python: >=3.8
+Requires-Dist: requests>=2.28.0
+Dynamic: author
+Dynamic: requires-dist
+Dynamic: requires-python
+Dynamic: summary
